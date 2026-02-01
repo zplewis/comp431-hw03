@@ -1,0 +1,70 @@
+MAIL FROM:<jeffay@cs.unc.edu >
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO :<alice@cs.unc.edu>
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO: <alice @cs.unc.edu>
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO:<alice@cs.unc.edu>
+RCPT TO :<bob@cs.unc.edu>
+
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO:<alice@cs.unc.edu>
+RCPT TO:<bob@cs.unc.edu>
+RCPT TO: <cathy@ cs.unc.edu>
+
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO:<alice@cs.unc.edu>
+RCPT TO:<bob@cs.unc.edu>
+RCPT TO:<cathy@cs.unc.edu>
+XDATA
+
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO:<alice@cs.unc.edu>
+RCPT TO:<bob@cs.unc.edu>
+RCPT TO:<cathy@cs.unc.edu>
+ DATA
+
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO:<alice@cs.unc.edu>
+RCPT TO:<bob@cs.unc.edu>
+RCPT TO:<cathy@cs.unc.edu>
+DATA
+.
+
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO:<alice@cs.unc.edu>
+RCPT TO:<bob@cs.unc.edu>
+RCPT TO:<cathy@cs.unc.edu>
+DATA
+This message only has one line in it.
+.
+
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO:<alice@cs.unc.edu>
+RCPT TO:<bob@cs.unc.edu>
+RCPT TO:<cathy@cs.unc.edu>
+DATA
+<CRLF>.<CRLF>
+.
+
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO:<alice@cs.unc.edu>
+RCPT TO:<bob@cs.unc.edu>
+RCPT TO:<cathy@cs.unc.edu>
+DATA
+<CRLF>.<CRLF> This text should appear in the email message, not parsed as ending the message.
+<CRLF>.<CRLF>
+<CRLF>.<CRLF>
+<CRLF>.<CRLF>
+.
+
+MAIL FROM:<jeffay@cs.unc.edu>
+RCPT TO:<alice@cs.unc.edu>
+RCPT TO:<bob@cs.unc.edu>
+RCPT TO:<cathy@cs.unc.edu>
+DATA
+Hey Bob, do you really think we should use SMTP as a class
+project in COMP 431 this year? The smart students are going to
+figure out automated ways to use this project to send
+anonymous SPAM to the world!
+.
