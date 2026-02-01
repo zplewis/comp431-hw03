@@ -1,18 +1,18 @@
-# comp431-hw02
+# comp431-hw03
 
 ## Tasks
 
-- Parse two additional SMTP messages
-- Change error/success reporting to use real SMTP mandated responses
-- Add server processing function
-  - read and process the SMTP messages to send an email message (including
-reading and processing the text of the message)
-  - save the contents of received messages in a file
-  - report errors when a "client" sends an email message incorrectly
-  - report when a client sends wrong/ill-formed SMTP messages or sends the
-  messages in the wrong order
-- start the state machine over (expecting a `MAIL FROM` message) upon any error
-occurring
+- read a forward-file (having the format of the file you created in HW2) and
+convert the contents of the mail messages back to SMTP commands
+  - each SMTP message generated will be written to standard output
+- The program should both:
+  - generate SMTP server messages
+  - "listen" for the SMTP response messages that a real server would emit in
+to those messages
+- Since the program will not be communicating with a real SMTP server, the user
+will have to simulate the server by typing in the appropriate SMTP response
+message after each SMTP server message
+- There is a QUIT command which follows the same grammar as the "DATA" command.
 
 ## Definitions
 
@@ -83,6 +83,9 @@ combined.
 Terminals are "indivisible units of a language", or a token.
 
 ```text
+<response-code> ::= <resp-number> <whitespace> <arbitrary-text> <CRLF>
+<resp-number> ::= "250" | "354" | "500" | "501" | "503"
+<arbitrary-text> ::= any sequence of printable characters
 <rcpt-to-cmd> ::= "RCPT" <whitespace> "TO:" <nullspace> <forward-path> <nullspace> <CRLF>
 <data-cmd> ::= "DATA" <nullspace> <CRLF>
 <mail-from-cmd> ::= "MAIL" <whitespace> "FROM:" <nullspace> <reverse-path> <nullspace> <CRLF>

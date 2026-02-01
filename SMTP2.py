@@ -227,6 +227,38 @@ class Parser:
 
         return True
 
+    def match_response_code(self) -> bool:
+        """
+        This is the non-terminal for both success and error codes.
+
+        <response-code> ::= <resp-number> <whitespace> <arbitrary-text> <CRLF>
+        """
+
+        return self.match_resp_number() and self.whitespace() and self.match_arbitrary_text() and \
+        self.crlf()
+
+    def match_resp_number(self) -> bool:
+        """
+        Matches a string literal for any of the allowed error or success messages.
+        """
+
+        start = self.position
+        codes = ["250", "354", "500", "501", "503"]
+
+        for code in codes:
+            if self.match_chars(code):
+                return True
+
+            self.rewind(start)
+
+        return False
+
+    def match_arbitrary_text(self) -> bool:
+        """
+        Matches any sequence of printable characters.
+        """
+
+
 
     def current_char(self) -> str:
         """
@@ -303,30 +335,34 @@ class Parser:
         if check_only:
             return True
 
-        self.nullspace()
-        self.forward_path()
-        self.nullspace()
-        if not self.crlf():
+        if not(self.nullspace() and self.forward_path() and self.nullspace() and not self.crlf()):
             raise ParserError(ParserError.SYNTAX_ERROR_IN_PARAMETERS)
 
         # If we reach here, the line was successfully parsed
         self.set_command_parsed()
         return self.print_success()
 
-    def data_cmd(self, check_only: bool = False) -> bool:
+    def word_only_commands(self, cmd_name: str, check_only: bool = False) -> bool:
         """
         The <data-cmd> non-terminal handles the "DATA" command.
+        The <quit-cmd> non-terminal handles the "QUIT" command.
 
         <data-cmd> ::= "DATA" <nullspace> <CRLF>
+        <quit-cmd> ::= "QUIT" <nullspace> <CRLF>
         """
+
+        allowed_cmds = ["QUIT", "DATA"]
+
+        if not cmd_name or not isinstance(cmd_name, str) or not cmd_name in allowed_cmds:
+            raise ValueError(f"word_only_commands(); must specify a valid command string literal ({','.join(allowed_cmds)})")
 
         # This is an example of a literal string in a production rule
         # If an error occurs here, it is a 500 error
-        if not self.match_chars("DATA"):
+        if not self.match_chars(cmd_name):
             return self.raise_parser_error(ParserError.COMMAND_UNRECOGNIZED, check_only)
 
         # Flag that the command has been identified
-        self.set_command_identified("DATA")
+        self.set_command_identified(cmd_name)
 
         # If we are only checking for command recognition, we can stop here and return
         if check_only:
@@ -337,7 +373,30 @@ class Parser:
 
         # If we reach here, the line was successfully parsed
         self.set_command_parsed()
-        return self.print_success(354)
+
+        if cmd_name == "DATA":
+            return self.print_success(354)
+
+        # TODO: See what you need to print, if anything, for QUIT.
+        return True
+
+    def quit_cmd(self, check_only: bool = False) -> bool:
+        """
+        The <quit-cmd> non-terminal handles the "QUIT" command.
+
+        <quit-cmd> ::= "QUIT" <nullspace> <CRLF>
+        """
+
+        return self.word_only_commands("QUIT", check_only=check_only)
+
+    def data_cmd(self, check_only: bool = False) -> bool:
+        """
+        The <data-cmd> non-terminal handles the "DATA" command.
+
+        <data-cmd> ::= "DATA" <nullspace> <CRLF>
+        """
+
+        return self.word_only_commands("DATA", check_only=check_only)
 
     def data_read_msg_line(self):
         """
