@@ -2,11 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 Patrick Lewis for COMP 431 Spring 2026
-HW2: More Baby-steps Towards the Construction of an SMTP Server
+HW3: Even More Baby-steps Towards the Construction of an SMTP Server (The Final Step!)
 """
 
 from pathlib import Path
 import argparse
+import os
 import sys
 
 
@@ -235,6 +236,36 @@ class Parser:
         """
 
         return self.get_address_line_for_email("TO:")
+    
+    def generate_mail_from_cmd(self) -> str:
+        """
+        Creates a "MAIL FROM:" command if the input string contains an email address.
+        """
+
+        email_address = self.get_email_address()
+        return f"MAIL FROM: <{email_address}>"
+    
+    def generate_rcpt_to_cmd(self) -> str:
+        """
+        Creates a "RCPT TO:" command if the input string contains an email address.
+        """
+
+        email_address = self.get_email_address()
+        return f"RCPT TO: <{email_address}>"
+    
+    def generate_data_cmd(self) -> str:
+        """
+        Creates a "DATA" command.
+        """
+
+        return "DATA"
+    
+    def generate_data_end_cmd(self) -> str:
+        """
+        Prints the ".<CRLF>" needed to indicate the end of the body of the email.
+        """
+
+        return "."
 
     def print_success(self, msg_no: int = 250) -> bool:
         """
@@ -300,6 +331,25 @@ class Parser:
             return
 
         self.position += 1
+
+    def forwardfile_match_from_address(self) -> bool:
+        """
+        Matches the "From: <sender@domain.com>" from a forward file. From this line, we can
+        recreate the "MAIL FROM:" command.
+        """
+
+        return (self.match_chars("From:") and self.whitespace() and self.reverse_path() and \
+                self.nullspace() and self.crlf())
+    
+    def forwardfile_match_to_address(self) -> bool:
+        """
+        Matches the "To: <sender@domain.com>" from a forward file. From this line, we can
+        recreate the "RCPT TO:" command.
+        """
+
+        return (self.match_chars("To:") and self.whitespace() and self.reverse_path() and \
+                self.nullspace() and self.crlf())
+
 
     def is_at_end(self) -> bool:
         """
@@ -1127,10 +1177,103 @@ class SMTPServer:
             with forward_path.open("a", encoding="utf-8") as f:
                 f.write(email_complete_text)
 
-def detect_debug_mode() -> bool:
+class SMTPClientSide:
     """
-    Detects whether debug mode is enabled or not from the command line. Useful for debugging
-    without having to remove numerous print statements once things are working.
+    Class that will operate like a state machine to keep track of what command
+    is being handled next.
+    """
+    EXPECTING_MAIL_FROM = 0
+    EXPECTING_RCPT_TO = 1
+    EXPECTING_RCPT_TO_OR_DATA = 2
+    EXPECTING_DATA_END = 3
+
+    def __init__(self, debug_mode: bool = False):
+        self.state = self.EXPECTING_MAIL_FROM
+        self.to_email_addresses = []
+        self.email_text = []
+        self.parser = None
+        self.debug_mode = debug_mode
+
+    def set_parser(self, current_parser: Parser):
+        """
+        By the time the parser is set, the line has already been read. That means,
+        what we do is check the current state and act accordingly.
+        """
+        self.parser = current_parser
+
+        if not isinstance(current_parser, Parser):
+            raise ValueError("parser must be an instance of Parser class.")
+        
+    def evaluate_state(self):
+        """
+        Based on the current state, print to standard output the appropriate SMTP message.
+        Since we can assume that forward files are well-formed, we do not even have to validate and
+        just get what we need.
+        """
+        if not isinstance(self.parser, Parser):
+            raise ValueError("parser must be an instance of Parser class.")
+
+        # STATE == 0
+        if self.state == self.EXPECTING_MAIL_FROM:
+            print(self.parser.generate_mail_from_cmd())
+            return
+        
+        if self.state == self.EXPECTING_RCPT_TO:
+            print(self.parser.generate_rcpt_to_cmd())
+            return
+
+
+        if self.state == self.EXPECTING_RCPT_TO_OR_DATA:
+            if self.parser.forwardfile_match_to_address():
+                print(self.parser.generate_rcpt_to_cmd())
+                return
+
+            print(self.parser.generate_data_cmd())
+            return
+        
+        if self.state == self.EXPECTING_DATA_END:
+            if self.parser.data_end_cmd():
+                print(self.parser.generate_data_end_cmd())
+                return
+            
+            print(self.parser.get_input_line())
+
+    def evaluate_response(self):
+        """
+        Based on the current state:
+        1) Read the "server" response message, which could be either 250, 354, 500, 501, etc. If
+        a success message is given (based on the context), then it is okay to advance to the
+        next state (as appropriate).
+        2) Make sure to only validate the response message number only, as the text after the
+        number can be anything.
+        """
+        if not isinstance(self.parser, Parser):
+            raise ValueError("parser must be an instance of Parser class.")
+        
+
+        
+    def reset(self):
+        """
+        Resets the SMTP server state machine to expect a new email.
+        """
+        self.state = self.EXPECTING_MAIL_FROM
+        self.to_email_addresses = []
+        self.email_text = []
+
+    def advance(self):
+        """
+        Advances the state of the SMTP server by 1. If a message is completed,
+        then it starts over and waits for the next one.
+        """
+        if self.state != self.EXPECTING_DATA_END:
+            self.state += 1
+            return
+
+        self.reset()
+
+def get_command_line_arguments():
+    """
+    Handles command line arguments for the forward file and debug mode.
     """
 
     arg_parser = argparse.ArgumentParser(description="HW2: More Baby-steps Towards the Construction of an SMTP Server")
@@ -1141,13 +1284,65 @@ def detect_debug_mode() -> bool:
         action="store_true",
         help="Enable additional logging that is helpful for debugging without modifying code."
     )
-    command_line_args = arg_parser.parse_args()
 
-    return command_line_args.debug
+    # Add an argument for reading the forward file
+    arg_parser.add_argument(
+        "input_file",
+        help="Path to the forward file",
+        type=Path
+    )
+
+    return arg_parser.parse_args()
 
 def main():
     """
-    The starting point for the entire script.
+    Reads and loops through a well-formatted forward file.
+    """
+
+    args = get_command_line_arguments()
+    debug_mode = args.debug
+    forward_file = args.input_file
+
+    if debug_mode:
+        print("Debug mode enabled for this script.")
+
+    if not forward_file or not forward_file.exists():
+        print(f"The forward file {forward_file} does not exist.")
+        return
+    
+    # To parse the forward file, we also need something like a state machine, especially since
+    # a forward file can contain more than one email.
+    client_side = SMTPClientSide(debug_mode)
+
+    try:
+
+        with forward_file.open(mode='r', newline='\n') as f:
+
+            # Loop through each line of the file
+            for line in f:
+
+                # Create a Parser object to parse this line
+                parser = Parser(line, debug_mode=debug_mode)
+
+                # This time, you do not print out the line from the forward file; you print
+                # the SMTP command as appropriate (could also just be email body text)
+                client_side.set_parser(parser)
+
+                # Based on the current line, evaluate the state and print accordingly
+
+                # After printing the appropriate line, prompt the user for the response
+
+
+
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
+
+
+
+def hw02():
+    """
+    The starting point for the entire script (HW02)
     """
 
     debug_mode = detect_debug_mode()

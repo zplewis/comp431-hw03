@@ -13,6 +13,11 @@ to those messages
 will have to simulate the server by typing in the appropriate SMTP response
 message after each SMTP server message
 - There is a QUIT command which follows the same grammar as the "DATA" command.
+- the user will simulate providing the server response message
+  - all of your program's inputs should be read from standard input (stdin)
+- when parsing SMTP response messages, you should only parse for the response number and ignore
+whatever text is also sent with the response message
+- echo the entire SMTP response message you receive to standard error (stderr) and NOT standard input!
 
 ## Definitions
 
@@ -45,7 +50,7 @@ mailbox
   - the local mail server
   - the destination mail server
 
-- There is an RFC for SMTP for SMTP created by the Network Working Gr\oup
+- There is an RFC for SMTP for SMTP created by the Network Working Group
 
 ## Messages
 
