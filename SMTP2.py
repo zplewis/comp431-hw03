@@ -171,6 +171,41 @@ class Parser:
         # necessarily a problem (depending on the state of the SMTP Server)
         self.rewind(start)
         return False
+    
+    def get_smtp_response_code(self) -> str:
+        """
+        Every SMTP response code, based on the grammar, starts with <resp-number>. Return this
+        value.
+        """
+
+        if len(self.input_string) < 3:
+            return ""
+        
+        # We need exactly three digit characters
+        resp_number = self.input_string[:3]
+
+        # https://docs.python.org/3/library/stdtypes.html#str.isdigit
+        # Apparently, this works on an entire string, not just a single character.
+        if not resp_number.isdigit():
+            return ""
+        
+        return resp_number
+    
+    def is_error_smtp_response_code(self) -> bool:
+        """
+        Assuming that the input string matched on <response-code>, returns True if the error
+        code >= 500.
+        """
+
+        resp_number_str = self.get_smtp_response_code()
+
+        if not resp_number_str or len(resp_number_str) != 3:
+            return False
+
+        resp_number_int = int(resp_number_str)
+
+        return resp_number_int >= 500
+
 
     def get_input_line_raw(self) -> str:
         """
@@ -311,7 +346,10 @@ class Parser:
         Matches any sequence of printable characters.
         """
 
+        while self.match_ascii_printable():
+            pass
 
+        return True
 
     def current_char(self) -> str:
         """
@@ -1189,10 +1227,9 @@ class SMTPClientSide:
 
     def __init__(self, debug_mode: bool = False):
         self.state = self.EXPECTING_MAIL_FROM
-        self.to_email_addresses = []
-        self.email_text = []
         self.parser = None
         self.debug_mode = debug_mode
+        self.generated_cmd = ""
 
     def set_parser(self, current_parser: Parser):
         """
@@ -1204,11 +1241,25 @@ class SMTPClientSide:
         if not isinstance(current_parser, Parser):
             raise ValueError("parser must be an instance of Parser class.")
         
-    def evaluate_state(self):
+    def get_generated_cmd(self) -> str:
+        """
+        Docstring for get_generated_cmd
+        
+        :param self: Description
+        :return: Description
+        :rtype: str
+        """
+
+        return self.generated_cmd
+        
+    def evaluate_state(self) -> bool:
         """
         Based on the current state, print to standard output the appropriate SMTP message.
         Since we can assume that forward files are well-formed, we do not even have to validate and
         just get what we need.
+
+        If an SMTP response message should be in sent by the user after this command, then
+        return True.
         """
         if not isinstance(self.parser, Parser):
             raise ValueError("parser must be an instance of Parser class.")
@@ -1216,49 +1267,116 @@ class SMTPClientSide:
         # STATE == 0
         if self.state == self.EXPECTING_MAIL_FROM:
             print(self.parser.generate_mail_from_cmd())
-            return
+            return True
         
         if self.state == self.EXPECTING_RCPT_TO:
             print(self.parser.generate_rcpt_to_cmd())
-            return
+            return True
 
 
         if self.state == self.EXPECTING_RCPT_TO_OR_DATA:
             if self.parser.forwardfile_match_to_address():
                 print(self.parser.generate_rcpt_to_cmd())
-                return
+                return True
 
             print(self.parser.generate_data_cmd())
-            return
+            return True
         
         if self.state == self.EXPECTING_DATA_END:
-            if self.parser.data_end_cmd():
-                print(self.parser.generate_data_end_cmd())
-                return
+            if not self.parser.data_end_cmd():
+                print(self.parser.get_input_line())
+                return False
             
-            print(self.parser.get_input_line())
+        print(self.parser.generate_data_end_cmd())
+        return True
 
-    def evaluate_response(self):
+    def print_to_stderr(self, text: str):
+        """
+        Prints the specified text to standard error (without using the print() function).
+        """
+
+        # Apparently, print() was printing an extra line
+        sys.stderr.write(text)
+        sys.stderr.flush()
+
+    def debug_print(self, text: str):
+        if not self.debug_mode:
+            return
+        
+        print(text)
+
+    def evaluate_response(self) -> bool:
         """
         Based on the current state:
         1) Read the "server" response message, which could be either 250, 354, 500, 501, etc. If
         a success message is given (based on the context), then it is okay to advance to the
-        next state (as appropriate).
+        next state (as appropriate). This comes from the user (standard input).
         2) Make sure to only validate the response message number only, as the text after the
         number can be anything.
+        3) When echoing the response, print to standard error (stderr)!
         """
         if not isinstance(self.parser, Parser):
             raise ValueError("parser must be an instance of Parser class.")
         
-
+        # If the state is expecting the end of the DATA command, but we have not actually received
+        # the data_end_cmd yet, then do not print anything to standard error (stderr)
+        if self.state == self.EXPECTING_DATA_END:
+            self.parser.reset()
+            if not self.parser.data_end_cmd():
+                self.debug_print(f"This line is part of the email body: {self.parser.get_input_line()}")
+                return False
+            
+        # No matter what message is received, echo it to stderr
+        self.print_to_stderr(self.parser.get_input_line_raw())
+        
+        # Stop here if the response is not properly formatted according to the provided
+        # production rule; technically, some kind of error occurred
+        if not self.parser.match_response_code():
+            self.debug_print(f"evaluate_response(); the parsed message was not a response code: {self.parser.get_input_line()}")
+            self.quit_immediately()
+            return False
+        
+        # Stop here if a properly formatted error message is received
+        if self.parser.is_error_smtp_response_code():
+            self.debug_print(f"evaluate_response(); the parsed message is an error code: {self.parser.get_input_line()}")
+            self.quit_immediately()
+            return False
+        
+        # Based on the state, if the wrong message is received, then quit immediately
+        resp_number = self.parser.get_smtp_response_code()
+        if self.state in [self.EXPECTING_MAIL_FROM, self.EXPECTING_RCPT_TO, self.EXPECTING_DATA_END] and resp_number != '250':
+            self.debug_print(f"wrong response code for state '{self.state}': {resp_number}")
+            self.quit_immediately()
+            return False
+        
+        if self.state == self.EXPECTING_RCPT_TO_OR_DATA and not resp_number in ('250', '354'):
+            self.debug_print(f"wrong response code for state '{self.state}': {resp_number}")
+            self.quit_immediately()
+            return False
+        
+        # Now, find reasons to advance
+        if self.state == self.EXPECTING_RCPT_TO_OR_DATA:
+            if resp_number == '354':
+                self.advance()
+                return False
+            
+        if self.state in [self.EXPECTING_MAIL_FROM, self.EXPECTING_RCPT_TO]:
+            self.advance()
+            return True
+        
+        # Make sure to reset the state just in case there is more than one message
+        if self.state == self.EXPECTING_DATA_END:
+            self.advance()
+            return True
+        
+        return False
         
     def reset(self):
         """
         Resets the SMTP server state machine to expect a new email.
         """
         self.state = self.EXPECTING_MAIL_FROM
-        self.to_email_addresses = []
-        self.email_text = []
+        self.generated_cmd = ""
 
     def advance(self):
         """
@@ -1270,6 +1388,22 @@ class SMTPClientSide:
             return
 
         self.reset()
+
+    def quit_immediately(self):
+        """
+        Upon receiving any error message from the SMTP "server" or otherwise encountering an error,
+        you should stop processing email, emit the SMTP message "QUIT" to standard output, and
+        terminate your program.
+
+        When you reach the end of the forward file, send the SMTP message "QUIT".
+
+        If you received an SMTP error response, write the response message received (the whole thing)
+        to stderr before quitting. This still aligns with echoing the received SMTP response message
+        to stderr, just with the extra step of quitting.
+        """
+
+        print("QUIT")
+        sys.exit(0)
 
 def get_command_line_arguments():
     """
@@ -1329,72 +1463,38 @@ def main():
                 client_side.set_parser(parser)
 
                 # Based on the current line, evaluate the state and print accordingly
+                if not client_side.evaluate_state():
+                    continue
 
-                # After printing the appropriate line, prompt the user for the response
+                # After printing the appropriate line, prompt the user for the response that would
+                # be normally sent from an SMTP server
+                response = sys.stdin.readline()
 
+                # Evaluate the response and act accordingly
+                parser = Parser(response, debug_mode=debug_mode)
+                client_side.set_parser(parser)
+                client_side.evaluate_response()
 
-
+    except EOFError:
+        # Ctrl+D (Unix) or end-of-file from a pipe
+        # break
+        pass
+    except KeyboardInterrupt:
+        # Ctrl+C
+        # break
+        pass
+    except ParserError as pe:
+        # All errors that should be handled according to the writeup are handled as ParserError
+        # objects. All other exceptions are ValueError or some other type. If a ParserError
+        # occurrs, the write up says "upon receipt of any erroneous SMTP message you should
+        # reset your state machine and return to the state of waiting for a valid MAIL FROM
+        # message".
+        print(pe)
+        # server.reset()
+        # continue
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
-
-
-
-
-def hw02():
-    """
-    The starting point for the entire script (HW02)
-    """
-
-    debug_mode = detect_debug_mode()
-
-    if debug_mode:
-        print("Debug mode enabled for this script.")
-
-    # Create an SMTPServer object to act as a state machine for processing lines and creating
-    # email messages.
-    server = SMTPServer(debug_mode)
-
-    while True:
-        try:
-            # read one line from standard input
-            # line = input()
-            line = sys.stdin.readline()
-            if not line or line == "":
-                if debug_mode:
-                    print("End-of-life is reached on the input stream. Stopping here.")
-                break
-
-            # Create a Parser object to parse this line
-            parser = Parser(line, debug_mode=debug_mode)
-            # Apparently, print() was printing an extra line
-            sys.stdout.write(line)
-            sys.stdout.flush()
-
-            # Pass this parser to the SMTPServer object
-            server.set_parser(parser)
-
-            # Based on the current line, evaluate the state of the SMTP server and what should be
-            # done.
-            server.evaluate_state()
-
-        except EOFError:
-            # Ctrl+D (Unix) or end-of-file from a pipe
-            break
-        except KeyboardInterrupt:
-            # Ctrl+C
-            break
-        except ParserError as pe:
-            # All errors that should be handled according to the writeup are handled as ParserError
-            # objects. All other exceptions are ValueError or some other type. If a ParserError
-            # occurrs, the write up says "upon receipt of any erroneous SMTP message you should
-            # reset your state machine and return to the state of waiting for a valid MAIL FROM
-            # message".
-            print(pe)
-            server.reset()
-            continue
-        except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-            break
+        # break
 
 if __name__ == "__main__":
     main()
