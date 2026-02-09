@@ -1271,11 +1271,8 @@ class SMTPClientSide:
 
     def get_generated_cmd(self) -> str:
         """
-        Docstring for get_generated_cmd
-
-        :param self: Description
-        :return: Description
-        :rtype: str
+        This is the command, if any, that is generated when a line from the forward file is analyzed
+        based on the current state.
         """
 
         return self.generated_cmd
@@ -1315,6 +1312,7 @@ class SMTPClientSide:
 
         if self.state == self.EXPECTING_RCPT_TO_OR_DATA:
             if self.parser.forwardfile_match_to_address():
+                self.generated_cmd = "RCPT TO"
                 print(self.parser.generate_rcpt_to_cmd())
                 return True
 
@@ -1431,6 +1429,12 @@ class SMTPClientSide:
         if self.state == self.EXPECTING_DATA_END and end_of_file:
             self.debug_print("evaluate_response(); end-of-file reached, QUIT should be printed next")
             return self.quit_immediately()
+        
+        # 4) # If the generated command is "RCPT TO:", then do NOT advance and there is NO need
+        # to process the input string (most likely an email address) again.
+        # Only advance if the "DATA" command has been determined to be needed by evaluate_state()
+        if self.state == self.EXPECTING_RCPT_TO_OR_DATA and self.generated_cmd != "DATA":
+            return False
 
         # Since you only reach this point if a valid response code is entered, then it is safe
         # to advance the state.
@@ -1444,7 +1448,7 @@ class SMTPClientSide:
         Resets the SMTP server state machine to expect a new email.
         """
         self.state = self.EXPECTING_MAIL_FROM
-        self.generated_cmd = ""
+        # self.generated_cmd = ""
         self.input_string = ""
 
     def advance(self):
@@ -1452,11 +1456,14 @@ class SMTPClientSide:
         Advances the state of the SMTP server by 1. If a message is completed,
         then it starts over and waits for the next one.
         """
-        if self.state != self.EXPECTING_DATA_END:
-            self.state += 1
-            return
-
-        self.reset()
+        
+        next_state = self.EXPECTING_MAIL_FROM if self.state == self.EXPECTING_DATA_END else self.state + 1
+        
+        self.debug_print(f"advancing state from {self.state} to {next_state}")
+        
+        self.state = next_state
+        if (next_state == self.EXPECTING_MAIL_FROM):
+            self.reset()
 
     def quit_immediately(self):
         """
@@ -1592,34 +1599,7 @@ def main():
                 # process the line, keep up with the result
                 client_side = process_line(client_side, line, False, debug_mode)
 
-                # if debug_mode:
-                #     sys.stdout.write(f"ff line: {bcolors.OKCYAN}{line}{bcolors.ENDC}")
-                #     sys.stdout.flush()
-
-                # # Create a Parser object to parse this line
-                # parser = Parser(line, debug_mode=debug_mode)
-
-                # # This time, you do not print out the line from the forward file; you print
-                # # the SMTP command as appropriate (could also just be email body text)
-                # client_side.set_parser(parser)
-
-                # # Based on the current line, evaluate the state and print accordingly
-                # prompt_for_response = client_side.evaluate_state()
-
-                # if not prompt_for_response:
-                #     if debug_mode:
-                #         print(f"No SMTP response requested for state '{client_side.get_state()}'")
-                #     continue
-
-                # # After printing the appropriate line, prompt the user for the response that would
-                # # be normally sent from an SMTP server
-                # response = sys.stdin.readline()
-
-                # # Evaluate the response and act accordingly
-                # parser = Parser(response, debug_mode=debug_mode)
-                # client_side.set_parser(parser)
-                # client_side.evaluate_response()
-
+            # One last time after we have reached EOF
             client_side = process_line(client_side, "", True, debug_mode)
 
     except EOFError:
