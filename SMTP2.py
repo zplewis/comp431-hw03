@@ -10,6 +10,20 @@ import argparse
 import os
 import sys
 
+# Source - https://stackoverflow.com/a/287944
+# Posted by joeld, modified by community. See post 'Timeline' for change history
+# Retrieved 2026-02-08, License - CC BY-SA 4.0
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
 
 
 class ParserError(Exception):
@@ -171,7 +185,7 @@ class Parser:
         # necessarily a problem (depending on the state of the SMTP Server)
         self.rewind(start)
         return False
-    
+
     def get_smtp_response_code(self) -> str:
         """
         Every SMTP response code, based on the grammar, starts with <resp-number>. Return this
@@ -180,7 +194,7 @@ class Parser:
 
         if len(self.input_string) < 3:
             return ""
-        
+
         # We need exactly three digit characters
         resp_number = self.input_string[:3]
 
@@ -188,9 +202,9 @@ class Parser:
         # Apparently, this works on an entire string, not just a single character.
         if not resp_number.isdigit():
             return ""
-        
+
         return resp_number
-    
+
     def is_error_smtp_response_code(self) -> bool:
         """
         Assuming that the input string matched on <response-code>, returns True if the error
@@ -216,16 +230,13 @@ class Parser:
 
     def get_input_line(self) -> str:
         """
-        Docstring for get_input_line
-
-        :param self: Description
-        :return: Description
-        :rtype: str
+        Retrieves the input line for printing to stdout or stderr without the
+        last newline character.
         """
 
-        if self.debug_mode:
-            print(f"original: {self.input_string}")
-            print(f"sliced: {self.input_string[:-1]}")
+        # if self.debug_mode:
+        #     print(f"original: {self.input_string}")
+        #     print(f"sliced: {self.input_string[:-1]}")
 
         if not self.input_string.endswith("\n"):
             return self.input_string
@@ -271,7 +282,7 @@ class Parser:
         """
 
         return self.get_address_line_for_email("TO:")
-    
+
     def generate_mail_from_cmd(self) -> str:
         """
         Creates a "MAIL FROM:" command if the input string contains an email address.
@@ -279,7 +290,7 @@ class Parser:
 
         email_address = self.get_email_address()
         return f"MAIL FROM: <{email_address}>"
-    
+
     def generate_rcpt_to_cmd(self) -> str:
         """
         Creates a "RCPT TO:" command if the input string contains an email address.
@@ -287,14 +298,14 @@ class Parser:
 
         email_address = self.get_email_address()
         return f"RCPT TO: <{email_address}>"
-    
+
     def generate_data_cmd(self) -> str:
         """
         Creates a "DATA" command.
         """
 
         return "DATA"
-    
+
     def generate_data_end_cmd(self) -> str:
         """
         Prints the ".<CRLF>" needed to indicate the end of the body of the email.
@@ -378,7 +389,7 @@ class Parser:
 
         return (self.match_chars("From:") and self.whitespace() and self.reverse_path() and \
                 self.nullspace() and self.crlf())
-    
+
     def forwardfile_match_to_address(self) -> bool:
         """
         Matches the "To: <sender@domain.com>" from a forward file. From this line, we can
@@ -1221,8 +1232,19 @@ class SMTPClientSide:
     is being handled next.
     """
     EXPECTING_MAIL_FROM = 0
+    """
+    Represents the "MAIL FROM:" command. Only occurs once.
+    """
     EXPECTING_RCPT_TO = 1
+    """
+    Represents the "RCPT TO:" command, specifically this one time because at
+    lease one "RCPT TO:" command is required for a well-formed email message.
+    """
     EXPECTING_RCPT_TO_OR_DATA = 2
+    """
+    Represents 0 or more "RCPT TO:" commands or the first line of the email body
+    inside a forward file.
+    """
     EXPECTING_DATA_END = 3
 
     def __init__(self, debug_mode: bool = False):
@@ -1230,6 +1252,12 @@ class SMTPClientSide:
         self.parser = None
         self.debug_mode = debug_mode
         self.generated_cmd = ""
+        self.input_line = ""
+        """
+        This is the current line from the forward file. This will be useful
+        in instances where the existence of a line signals the change in state
+        but must be printed to standard out (stdout).
+        """
 
     def set_parser(self, current_parser: Parser):
         """
@@ -1240,19 +1268,27 @@ class SMTPClientSide:
 
         if not isinstance(current_parser, Parser):
             raise ValueError("parser must be an instance of Parser class.")
-        
+
     def get_generated_cmd(self) -> str:
         """
         Docstring for get_generated_cmd
-        
+
         :param self: Description
         :return: Description
         :rtype: str
         """
 
         return self.generated_cmd
-        
-    def evaluate_state(self) -> bool:
+
+    def get_state(self):
+        """
+        Get the current state of the SMTPClientSide.
+        """
+
+        return self.state
+
+
+    def evaluate_state(self, end_of_file: bool = False) -> bool:
         """
         Based on the current state, print to standard output the appropriate SMTP message.
         Since we can assume that forward files are well-formed, we do not even have to validate and
@@ -1264,31 +1300,48 @@ class SMTPClientSide:
         if not isinstance(self.parser, Parser):
             raise ValueError("parser must be an instance of Parser class.")
 
+        # clear the generated command
+        self.generated_cmd = ""
+        self.input_line = self.parser.get_input_line()
+
         # STATE == 0
         if self.state == self.EXPECTING_MAIL_FROM:
             print(self.parser.generate_mail_from_cmd())
             return True
-        
+
         if self.state == self.EXPECTING_RCPT_TO:
             print(self.parser.generate_rcpt_to_cmd())
             return True
-
 
         if self.state == self.EXPECTING_RCPT_TO_OR_DATA:
             if self.parser.forwardfile_match_to_address():
                 print(self.parser.generate_rcpt_to_cmd())
                 return True
 
+            # If we made it here, that means that the text is NOT "To: <emailaddress>"
+            # This text, then, is the first line of the body of the email.
+            # We need to:
+            # 1. Send the "DATA" command
+            # 2. Prompt the user for an SMTP response
+            self.generated_cmd = "DATA"
             print(self.parser.generate_data_cmd())
             return True
-        
+
         if self.state == self.EXPECTING_DATA_END:
-            if not self.parser.data_end_cmd():
-                print(self.parser.get_input_line())
-                return False
-            
-        print(self.parser.generate_data_end_cmd())
-        return True
+            if self.parser.forwardfile_match_from_address():
+                self.generated_cmd = "MAIL FROM"
+                print(self.parser.generate_data_end_cmd())
+                return True
+
+            if end_of_file:
+                print(self.parser.generate_data_end_cmd())
+                return True
+
+            # If we are here, that means the we are reading lines in the forward
+            # file that are part of the body of the email message.
+            print(self.parser.get_input_line())
+
+        return False
 
     def print_to_stderr(self, text: str):
         """
@@ -1296,16 +1349,19 @@ class SMTPClientSide:
         """
 
         # Apparently, print() was printing an extra line
+        if self.debug_mode:
+            text = f"{bcolors.FAIL}{text}{bcolors.ENDC}"
+
         sys.stderr.write(text)
         sys.stderr.flush()
 
     def debug_print(self, text: str):
         if not self.debug_mode:
             return
-        
+
         print(text)
 
-    def evaluate_response(self) -> bool:
+    def evaluate_response(self, end_of_file: bool = False) -> bool:
         """
         Based on the current state:
         1) Read the "server" response message, which could be either 250, 354, 500, 501, etc. If
@@ -1314,69 +1370,82 @@ class SMTPClientSide:
         2) Make sure to only validate the response message number only, as the text after the
         number can be anything.
         3) When echoing the response, print to standard error (stderr)!
+
+        The return value here determines whether we need to process the input file again after
+        advancing the state. This happens in 3 scenarios:
+
+        1) Encountering the first line of the email body, switching to EXPECTING_DATA_END state
+        2) Encountering the "From:" line of a new email, switching from EXPECTING_DATA_END to EXPECTING_MAIL_FROM
+        3) Encountering the end-of-file (empty string), switching from EXPECTING_DATA_END to EXPECTING_MAIL_FROM
         """
         if not isinstance(self.parser, Parser):
             raise ValueError("parser must be an instance of Parser class.")
-        
-        # If the state is expecting the end of the DATA command, but we have not actually received
-        # the data_end_cmd yet, then do not print anything to standard error (stderr)
-        if self.state == self.EXPECTING_DATA_END:
-            self.parser.reset()
-            if not self.parser.data_end_cmd():
-                self.debug_print(f"This line is part of the email body: {self.parser.get_input_line()}")
-                return False
-            
+
         # No matter what message is received, echo it to stderr
         self.print_to_stderr(self.parser.get_input_line_raw())
-        
+
         # Stop here if the response is not properly formatted according to the provided
         # production rule; technically, some kind of error occurred
         if not self.parser.match_response_code():
             self.debug_print(f"evaluate_response(); the parsed message was not a response code: {self.parser.get_input_line()}")
             self.quit_immediately()
             return False
-        
+
         # Stop here if a properly formatted error message is received
         if self.parser.is_error_smtp_response_code():
             self.debug_print(f"evaluate_response(); the parsed message is an error code: {self.parser.get_input_line()}")
             self.quit_immediately()
             return False
-        
+
         # Based on the state, if the wrong message is received, then quit immediately
         resp_number = self.parser.get_smtp_response_code()
-        if self.state in [self.EXPECTING_MAIL_FROM, self.EXPECTING_RCPT_TO, self.EXPECTING_DATA_END] and resp_number != '250':
+
+        self.debug_print(f"evaluate_response(); state: {self.state}, resp_number: {resp_number}, generated_cmd: {self.generated_cmd}")
+
+        if self.state in [self.EXPECTING_MAIL_FROM, self.EXPECTING_RCPT_TO, self.EXPECTING_DATA_END] \
+        and resp_number != '250':
             self.debug_print(f"wrong response code for state '{self.state}': {resp_number}")
             self.quit_immediately()
             return False
-        
-        if self.state == self.EXPECTING_RCPT_TO_OR_DATA and not resp_number in ('250', '354'):
-            self.debug_print(f"wrong response code for state '{self.state}': {resp_number}")
-            self.quit_immediately()
-            return False
-        
-        # Now, find reasons to advance
+
         if self.state == self.EXPECTING_RCPT_TO_OR_DATA:
-            if resp_number == '354':
-                self.advance()
+            if (self.generated_cmd == "DATA" and resp_number != '354') or \
+            (self.generated_cmd != "DATA" and resp_number != '250'):
+                self.debug_print(f"wrong response code for state '{self.state}': {resp_number}")
+                self.quit_immediately()
                 return False
-            
-        if self.state in [self.EXPECTING_MAIL_FROM, self.EXPECTING_RCPT_TO]:
+
+        # Handle the three reasons to re-evaluate the current line from the forward file after
+        # advancing the state
+        # 1) Encountering the first line of the email body, switching to EXPECTING_DATA_END state
+        if self.state == self.EXPECTING_RCPT_TO_OR_DATA and self.generated_cmd == "DATA":
             self.advance()
             return True
-        
-        # Make sure to reset the state just in case there is more than one message
-        if self.state == self.EXPECTING_DATA_END:
+
+        # 2) Encountering the "From:" line of a new email, switching from EXPECTING_DATA_END to EXPECTING_MAIL_FROM
+        if self.state == self.EXPECTING_DATA_END and self.generated_cmd == "MAIL FROM":
             self.advance()
             return True
-        
+
+        # 3) Encountering the end-of-file (empty string), switching from EXPECTING_DATA_END to EXPECTING_MAIL_FROM
+        if self.state == self.EXPECTING_DATA_END and end_of_file:
+            self.debug_print("evaluate_response(); end-of-file reached, QUIT should be printed next")
+            return self.quit_immediately()
+
+        # Since you only reach this point if a valid response code is entered, then it is safe
+        # to advance the state.
+        self.advance()
+
+        self.debug_print(f"evaluate_response(); no re-evaluation of the line necessary.")
         return False
-        
+
     def reset(self):
         """
         Resets the SMTP server state machine to expect a new email.
         """
         self.state = self.EXPECTING_MAIL_FROM
         self.generated_cmd = ""
+        self.input_string = ""
 
     def advance(self):
         """
@@ -1428,6 +1497,58 @@ def get_command_line_arguments():
 
     return arg_parser.parse_args()
 
+def process_line(client_side: SMTPClientSide, line: str, end_of_file: bool = False, debug_mode: bool = False) -> SMTPClientSide:
+    """
+    The heavy lifting of the state machine is handled here.
+
+    1) A line from the forward file is parsed and evaluated based on the current state.
+    2) If a response is required (250, 354), then evaluate_state() returns True.
+    3) The user input provides the response: 250 Some message
+    4) Echo the SMTP response to stderr, not stdout.
+    5) If the SMTP response is the right one, then check whether we need to advance the state and
+    evaluate the line from the forward file once more (evaluate_response() == True).
+    6) If the end of file is reached, that means the end of the email body is reached. Send the
+    command for ending the email body.
+    7) If the end of file is reached and 250 has been provided, echo it and then send the QUIT
+    command.
+    """
+
+    if debug_mode:
+        sys.stdout.write(f"ff line: {bcolors.OKCYAN}{line}{bcolors.ENDC}")
+        sys.stdout.flush()
+
+    # Create a Parser object to parse this line
+    parser = Parser(line, debug_mode=debug_mode)
+
+    # This time, you do not print out the line from the forward file; you print
+    # the SMTP command as appropriate (could also just be email body text)
+    client_side.set_parser(parser)
+
+    # Based on the current line, evaluate the state and print accordingly
+    prompt_for_response = client_side.evaluate_state(end_of_file)
+
+    if not prompt_for_response:
+        if debug_mode:
+            print(f"No SMTP response requested for state '{client_side.get_state()}'")
+        return client_side
+
+    # After printing the appropriate line, prompt the user for the response that would
+    # be normally sent from an SMTP server
+    response = sys.stdin.readline()
+
+    # Evaluate the response and act accordingly
+    parser = Parser(response, debug_mode=debug_mode)
+    client_side.set_parser(parser)
+
+    # If this returns True, then recursively call this function.
+    # This will evaluate the line again with a new state!
+    if client_side.evaluate_response(end_of_file):
+        if debug_mode:
+            print(f"{bcolors.WARNING}About to process line {line} again...{bcolors.ENDC}")
+        return process_line(client_side, line, end_of_file, debug_mode)
+
+    return client_side
+
 def main():
     """
     Reads and loops through a well-formatted forward file.
@@ -1443,10 +1564,23 @@ def main():
     if not forward_file or not forward_file.exists():
         print(f"The forward file {forward_file} does not exist.")
         return
-    
+
     # To parse the forward file, we also need something like a state machine, especially since
     # a forward file can contain more than one email.
     client_side = SMTPClientSide(debug_mode)
+
+    # Thinking:
+    # read forward file one line at a time
+    # From: yields "MAIL FROM:"
+    # To: yields "RCPT TO:"
+    # To: yields "RCPT TO:"
+    # "some email body text" yields "DATA"
+    # print "some email body text" without expecting a response
+    # print second sentence, without expecting a response
+    # "From:" means the end of the current email and yields "."
+
+    # What do I do when two things need to happen?
+    # When
 
     try:
 
@@ -1455,25 +1589,38 @@ def main():
             # Loop through each line of the file
             for line in f:
 
-                # Create a Parser object to parse this line
-                parser = Parser(line, debug_mode=debug_mode)
+                # process the line, keep up with the result
+                client_side = process_line(client_side, line, False, debug_mode)
 
-                # This time, you do not print out the line from the forward file; you print
-                # the SMTP command as appropriate (could also just be email body text)
-                client_side.set_parser(parser)
+                # if debug_mode:
+                #     sys.stdout.write(f"ff line: {bcolors.OKCYAN}{line}{bcolors.ENDC}")
+                #     sys.stdout.flush()
 
-                # Based on the current line, evaluate the state and print accordingly
-                if not client_side.evaluate_state():
-                    continue
+                # # Create a Parser object to parse this line
+                # parser = Parser(line, debug_mode=debug_mode)
 
-                # After printing the appropriate line, prompt the user for the response that would
-                # be normally sent from an SMTP server
-                response = sys.stdin.readline()
+                # # This time, you do not print out the line from the forward file; you print
+                # # the SMTP command as appropriate (could also just be email body text)
+                # client_side.set_parser(parser)
 
-                # Evaluate the response and act accordingly
-                parser = Parser(response, debug_mode=debug_mode)
-                client_side.set_parser(parser)
-                client_side.evaluate_response()
+                # # Based on the current line, evaluate the state and print accordingly
+                # prompt_for_response = client_side.evaluate_state()
+
+                # if not prompt_for_response:
+                #     if debug_mode:
+                #         print(f"No SMTP response requested for state '{client_side.get_state()}'")
+                #     continue
+
+                # # After printing the appropriate line, prompt the user for the response that would
+                # # be normally sent from an SMTP server
+                # response = sys.stdin.readline()
+
+                # # Evaluate the response and act accordingly
+                # parser = Parser(response, debug_mode=debug_mode)
+                # client_side.set_parser(parser)
+                # client_side.evaluate_response()
+
+            client_side = process_line(client_side, "", True, debug_mode)
 
     except EOFError:
         # Ctrl+D (Unix) or end-of-file from a pipe
