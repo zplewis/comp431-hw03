@@ -1429,7 +1429,7 @@ class SMTPClientSide:
         if self.state == self.EXPECTING_DATA_END and end_of_file:
             self.debug_print("evaluate_response(); end-of-file reached, QUIT should be printed next")
             return self.quit_immediately()
-        
+
         # 4) # If the generated command is "RCPT TO:", then do NOT advance and there is NO need
         # to process the input string (most likely an email address) again.
         # Only advance if the "DATA" command has been determined to be needed by evaluate_state()
@@ -1456,11 +1456,11 @@ class SMTPClientSide:
         Advances the state of the SMTP server by 1. If a message is completed,
         then it starts over and waits for the next one.
         """
-        
+
         next_state = self.EXPECTING_MAIL_FROM if self.state == self.EXPECTING_DATA_END else self.state + 1
-        
+
         self.debug_print(f"advancing state from {self.state} to {next_state}")
-        
+
         self.state = next_state
         if (next_state == self.EXPECTING_MAIL_FROM):
             self.reset()
