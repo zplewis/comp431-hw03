@@ -1569,7 +1569,8 @@ def main():
         print("Debug mode enabled for this script.")
 
     if not forward_file or not forward_file.exists():
-        print(f"The forward file {forward_file} does not exist.")
+        if debug_mode:
+            print(f"The forward file {forward_file} does not exist.")
         return
 
     # To parse the forward file, we also need something like a state machine, especially since
@@ -1620,7 +1621,7 @@ def main():
         # server.reset()
         # continue
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        # print(f"An unexpected error occurred: {e}")
         # break
 
 if __name__ == "__main__":
